@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Eventbrite OAuth Redirect</title>
+    <script>
+        // Extract authorization code from URL
+        const params = new URLSearchParams(window.location.search);
+        const authCode = params.get("code");
+        const error = params.get("error");
+
+        if (authCode) {
+            // Redirect to your Android app with custom scheme
+            window.location.href = "starcheckin://auth?code=" + authCode;
+        } else if (error) {
+            alert("Authorization failed: " + error);
+        }
+    </script>
+</head>
+<body>
+    <p>Completing login...</p>
+</body>
+</html>
