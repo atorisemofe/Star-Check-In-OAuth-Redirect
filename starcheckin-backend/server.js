@@ -10,6 +10,11 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REDIRECT_URI = "https://star-check-in-oauth-redirect.onrender.com/eventbrite-callback.html";
 
+app.get("/exchange_token", (req, res) => {
+    res.send("Backend is running! Use POST to /exchange_token with { code }");
+});
+
+
 app.post("/exchange_token", async (req, res) => {
     const { code } = req.body;
     if (!code) return res.status(400).json({ error: "Missing code" });
