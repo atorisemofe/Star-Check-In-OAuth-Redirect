@@ -77,6 +77,7 @@ app.post("/exchange_token", async (req, res) => {
             [data.access_token, data.refresh_token]
         );
 
+        console.log("OAuth tokens saved:", data.access_token);
         res.json(data);
     } catch (err) {
         console.error(err);
@@ -96,52 +97,6 @@ function getTokens() {
         );
     });
 }
-
-/* ============================
-   Fetch Attendees from Eventbrite
-============================ */
-app.get("/attendees/:eventId", async (req, res) => {
-    try {
-        const { eventId } = req.params;
-        const tokens = await getTokens();
-        if (!tokens) return res.status(400).json({ error: "No OAuth tokens stored" });
-
-        const response = await fetch(
-            `https://www.eventbriteapi.com/v3/events/${eventId}/attendees/`,
-            {
-                headers: {
-                    Authorization: `Bearer ${tokens.access_token}`
-                }
-            }
-        );
-
-        const data = await response.json();
-        const attendees = data.attendees || [];
-
-        attendees.forEach(a => {
-            db.run(
-                `
-                INSERT INTO attendees (id, name, email, status)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET 
-                    name=excluded.name,
-                    email=excluded.email
-                `,
-                [
-                    a.id,
-                    a.profile?.name || "",
-                    a.profile?.email || "",
-                    "updated"
-                ]
-            );
-        });
-
-        res.json(attendees);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Failed to fetch attendees" });
-    }
-});
 
 /* ============================
    WebSocket Setup
@@ -164,7 +119,7 @@ function broadcastAttendeeUpdate(attendee) {
 app.post("/webhook", async (req, res) => {
     console.log("=== Eventbrite Webhook Received ===");
     console.log("Headers:", req.headers);
-    console.log("Body:", req.body);
+    console.log("Body:", JSON.stringify(req.body, null, 2));
 
     // Immediately acknowledge receipt to Eventbrite
     res.json({ received: true });
@@ -177,34 +132,30 @@ app.post("/webhook", async (req, res) => {
         let attendeeData;
 
         if (apiUrl) {
-            // Real webhook: fetch attendee details from Eventbrite
-            const accessToken = process.env.EVENTBRITE_ACCESS_TOKEN;
-            if (!accessToken) {
-                console.warn("No EVENTBRITE_ACCESS_TOKEN set");
+            const tokens = await getTokens();
+            if (!tokens) {
+                console.warn("No OAuth tokens stored, cannot fetch attendee");
                 return;
             }
 
             const attendeeResp = await fetch(apiUrl, {
-                headers: { Authorization: `Bearer ${accessToken}` }
+                headers: { Authorization: `Bearer ${tokens.access_token}` }
             });
 
             if (!attendeeResp.ok) {
-                console.error("Failed to fetch attendee from Eventbrite:", attendeeResp.status);
+                console.error("Failed to fetch attendee from Eventbrite:", attendeeResp.status, await attendeeResp.text());
                 return;
             }
 
             attendeeData = await attendeeResp.json();
 
-            // Log the full JSON from Eventbrite for inspection
             console.log("=== Full attendee JSON from Eventbrite ===");
             console.log(JSON.stringify(attendeeData, null, 2));
 
-            // Make sure attendeeData has required fields
             attendeeData.id = attendeeData.id || "unknown_id";
             attendeeData.name = attendeeData.profile?.name || "Unknown";
             attendeeData.email = attendeeData.profile?.email || "";
-            attendeeData.status = attendeeData.status || action;
-
+            attendeeData.status = attendeeData.status || (attendeeData.checked_in ? "Checked In" : "Not Checked In");
         } else {
             // Test webhook: create a fake attendee
             attendeeData = {
@@ -239,13 +190,11 @@ app.post("/webhook", async (req, res) => {
     }
 });
 
-
-
 /* ============================
-   Local Attendee List (For Android)
+   Fetch All Attendees Locally
 ============================ */
 app.get("/local_attendees", (req, res) => {
-    db.all(`SELECT * FROM attendees`, [], (err, rows) => {
+    db.all(`SELECT * FROM attendees ORDER BY updated_at DESC`, [], (err, rows) => {
         if (err) return res.status(500).json({ error: "DB error" });
         res.json(rows);
     });
