@@ -102,7 +102,19 @@ function getTokens() {
    WebSocket Setup
 ============================ */
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ server, path: "/websocket" });
+
+wss.on("connection", (ws) => {
+    console.log("WebSocket client connected!");
+
+    ws.send(JSON.stringify({
+        id: "welcome_001",
+        name: "WebSocket Connected",
+        email: "",
+        status: "connected"
+    }));
+});
+
 
 function broadcastAttendeeUpdate(attendee) {
     const message = JSON.stringify(attendee);
