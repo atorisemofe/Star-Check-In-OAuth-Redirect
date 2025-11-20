@@ -161,39 +161,73 @@ function broadcastAttendeeUpdate(attendee) {
 /* ============================
    Webhook Endpoint
 ============================ */
-app.post("/webhook", (req, res) => {
+app.post("/webhook", async (req, res) => {
+    console.log("=== Eventbrite Webhook Received ===");
+    console.log("Headers:", req.headers);
+    console.log("Body:", req.body);
+
+    res.json({ received: true }); // immediately respond to Eventbrite
+
     try {
         const body = req.body;
-        const attendee = body?.api_url_object;
-        const status = body?.config?.action || "updated";
+        const apiUrl = body?.api_url;
+        const action = body?.config?.action || "updated";
 
-        if (attendee && attendee.id) {
-            db.run(
-                `
-                INSERT INTO attendees (id, name, email, status)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET 
-                    status=excluded.status,
-                    updated_at=CURRENT_TIMESTAMP
-                `,
-                [attendee.id, attendee.name || "", attendee.email || "", status]
-            );
+        let attendeeData;
 
-            // Broadcast update via WebSocket
-            broadcastAttendeeUpdate({
-                id: attendee.id,
-                name: attendee.name || "",
-                email: attendee.email || "",
-                status: status
+        if (apiUrl) {
+            // Real webhook: fetch attendee details from Eventbrite
+            const accessToken = process.env.EVENTBRITE_ACCESS_TOKEN;
+            if (!accessToken) {
+                console.warn("No EVENTBRITE_ACCESS_TOKEN set");
+                return;
+            }
+
+            const attendeeResp = await fetch(apiUrl, {
+                headers: { Authorization: `Bearer ${accessToken}` }
             });
+
+            if (!attendeeResp.ok) {
+                console.error("Failed to fetch attendee from Eventbrite:", attendeeResp.status);
+                return;
+            }
+
+            attendeeData = await attendeeResp.json();
+        } else {
+            // Test webhook: create a fake attendee
+            attendeeData = {
+                id: "test_001",
+                name: "Test Attendee",
+                email: "test@example.com",
+                status: action
+            };
         }
 
-        res.json({ received: true });
+        // Insert/update attendee in SQLite
+        db.run(
+            `
+            INSERT INTO attendees (id, name, email, status)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET 
+                status=excluded.status,
+                updated_at=CURRENT_TIMESTAMP
+            `,
+            [attendeeData.id, attendeeData.name || "", attendeeData.email || "", attendeeData.status || action]
+        );
+
+        // Broadcast update via WebSocket
+        broadcastAttendeeUpdate({
+            id: attendeeData.id,
+            name: attendeeData.name || "",
+            email: attendeeData.email || "",
+            status: attendeeData.status || action
+        });
+
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Webhook failed" });
+        console.error("Webhook processing error:", err);
     }
 });
+
 
 /* ============================
    Local Attendee List (For Android)
