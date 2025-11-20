@@ -194,6 +194,11 @@ app.post("/webhook", async (req, res) => {
             }
 
             attendeeData = await attendeeResp.json();
+
+            // Log the full JSON from Eventbrite for inspection
+            console.log("=== Full attendee JSON from Eventbrite ===");
+            console.log(JSON.stringify(attendeeData, null, 2));
+
             // Make sure attendeeData has required fields
             attendeeData.id = attendeeData.id || "unknown_id";
             attendeeData.name = attendeeData.profile?.name || "Unknown";
@@ -224,7 +229,7 @@ app.post("/webhook", async (req, res) => {
             [attendeeData.id, attendeeData.name, attendeeData.email, attendeeData.status]
         );
 
-        console.log("Attendee updated:", attendeeData);
+        console.log("Attendee updated in SQLite:", attendeeData);
 
         // Broadcast update via WebSocket
         broadcastAttendeeUpdate(attendeeData);
@@ -233,6 +238,7 @@ app.post("/webhook", async (req, res) => {
         console.error("Webhook processing error:", err);
     }
 });
+
 
 
 /* ============================
