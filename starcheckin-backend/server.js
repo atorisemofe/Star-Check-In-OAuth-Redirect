@@ -166,7 +166,8 @@ app.post("/webhook", async (req, res) => {
     console.log("Headers:", req.headers);
     console.log("Body:", req.body);
 
-    res.json({ received: true }); // immediately respond to Eventbrite
+    // Immediately acknowledge receipt to Eventbrite
+    res.json({ received: true });
 
     try {
         const body = req.body;
@@ -193,6 +194,12 @@ app.post("/webhook", async (req, res) => {
             }
 
             attendeeData = await attendeeResp.json();
+            // Make sure attendeeData has required fields
+            attendeeData.id = attendeeData.id || "unknown_id";
+            attendeeData.name = attendeeData.profile?.name || "Unknown";
+            attendeeData.email = attendeeData.profile?.email || "";
+            attendeeData.status = attendeeData.status || action;
+
         } else {
             // Test webhook: create a fake attendee
             attendeeData = {
@@ -209,19 +216,18 @@ app.post("/webhook", async (req, res) => {
             INSERT INTO attendees (id, name, email, status)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET 
+                name=excluded.name,
+                email=excluded.email,
                 status=excluded.status,
                 updated_at=CURRENT_TIMESTAMP
             `,
-            [attendeeData.id, attendeeData.name || "", attendeeData.email || "", attendeeData.status || action]
+            [attendeeData.id, attendeeData.name, attendeeData.email, attendeeData.status]
         );
 
+        console.log("Attendee updated:", attendeeData);
+
         // Broadcast update via WebSocket
-        broadcastAttendeeUpdate({
-            id: attendeeData.id,
-            name: attendeeData.name || "",
-            email: attendeeData.email || "",
-            status: attendeeData.status || action
-        });
+        broadcastAttendeeUpdate(attendeeData);
 
     } catch (err) {
         console.error("Webhook processing error:", err);
