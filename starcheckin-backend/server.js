@@ -18,7 +18,7 @@ app.use(cors());
 console.log("ENV Check:");
 console.log("CLIENT_ID:", process.env.CLIENT_ID ? "(set)" : "(missing)");
 console.log("CLIENT_SECRET:", process.env.CLIENT_SECRET ? "(set)" : "(missing)");
-console.log("EVENTBRITE_ACCESS_TOKEN:", process.env.EVENTBRITE_ACCESS_TOKEN ? "(set)" : "(missing)");
+console.log("EVENTBRITE_ACCESS_TOKEN: IGNORED — Using DB tokens only");
 
 // -------------------------------------------------------
 // DATABASE INIT
@@ -114,7 +114,7 @@ app.post("/exchange_token", async (req, res) => {
 });
 
 // -------------------------------------------------------
-// GET TOKENS
+// GET TOKENS FROM DB
 // -------------------------------------------------------
 function getTokens() {
     console.log("Fetching latest OAuth tokens from DB...");
@@ -145,12 +145,14 @@ app.get("/attendees/:eventId", async (req, res) => {
     try {
         const { eventId } = req.params;
         const tokens = await getTokens();
-        if (!tokens) {
-            console.warn("No OAuth tokens found in DB!");
+
+        if (!tokens?.access_token) {
+            console.warn("❌ No OAuth token found in DB!");
             return res.status(400).json({ error: "No OAuth tokens stored" });
         }
 
         console.log(`Fetching attendees for event: ${eventId}`);
+        console.log("Using access_token:", tokens.access_token);
 
         const response = await fetch(
             `https://www.eventbriteapi.com/v3/events/${eventId}/attendees/`,
@@ -202,7 +204,6 @@ const wss = new WebSocket.Server({ server, path: "/websocket" });
 
 wss.on("connection", ws => {
     console.log("🔌 WebSocket client connected.");
-
     ws.on("close", () => console.log("❌ WebSocket client disconnected"));
     ws.on("error", err => console.error("WebSocket error:", err));
 
@@ -230,7 +231,7 @@ function broadcastAttendeeUpdate(attendee) {
 }
 
 // -------------------------------------------------------
-// WEBHOOK ENDPOINT
+// WEBHOOK ENDPOINT — **UPDATED TO USE DB TOKEN**
 // -------------------------------------------------------
 app.post("/webhook", async (req, res) => {
     console.log("\n=== Eventbrite Webhook Received ===");
@@ -247,18 +248,22 @@ app.post("/webhook", async (req, res) => {
         console.log("Webhook api_url:", apiUrl);
         console.log("Webhook action:", action);
 
+        const tokens = await getTokens();
+        const accessToken = tokens?.access_token;
+
+        if (!accessToken) {
+            console.warn("❌ No DB OAuth token available. Cannot fetch webhook attendee.");
+            return;
+        }
+
         let attendeeData;
 
         if (apiUrl) {
-            console.log("Fetching attendee from Eventbrite:", apiUrl);
-
-            if (!process.env.EVENTBRITE_ACCESS_TOKEN) {
-                console.warn("⚠️ No EVENTBRITE_ACCESS_TOKEN set!");
-                return;
-            }
+            console.log(`Fetching attendee from Eventbrite using DB token...`);
+            console.log("Access token:", accessToken);
 
             const attendeeResp = await fetch(apiUrl, {
-                headers: { Authorization: `Bearer ${process.env.EVENTBRITE_ACCESS_TOKEN}` }
+                headers: { Authorization: `Bearer ${accessToken}` }
             });
 
             attendeeData = await attendeeResp.json();
