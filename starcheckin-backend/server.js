@@ -46,10 +46,6 @@ db.serialize(() => {
 /* ============================
    OAuth Token Exchange
 ============================ */
-app.get("/exchange_token", (req, res) => {
-    res.send("Backend is running! Use POST to /exchange_token with { code }");
-});
-
 app.post("/exchange_token", async (req, res) => {
     const { code } = req.body;
     if (!code) return res.status(400).json({ error: "Missing code" });
@@ -70,14 +66,12 @@ app.post("/exchange_token", async (req, res) => {
 
         const data = await response.json();
 
-        // store tokens
         db.run(`DELETE FROM tokens`);
         db.run(
             `INSERT INTO tokens (access_token, refresh_token) VALUES (?, ?)`,
             [data.access_token, data.refresh_token]
         );
 
-        console.log("OAuth tokens saved:", data.access_token);
         res.json(data);
     } catch (err) {
         console.error(err);
@@ -99,14 +93,56 @@ function getTokens() {
 }
 
 /* ============================
-   WebSocket Setup
+   Fetch Attendees
+============================ */
+app.get("/attendees/:eventId", async (req, res) => {
+    try {
+        const { eventId } = req.params;
+        const tokens = await getTokens();
+        if (!tokens) return res.status(400).json({ error: "No OAuth tokens stored" });
+
+        const response = await fetch(
+            `https://www.eventbriteapi.com/v3/events/${eventId}/attendees/`,
+            { headers: { Authorization: `Bearer ${tokens.access_token}` } }
+        );
+
+        const data = await response.json();
+        const attendees = data.attendees || [];
+
+        attendees.forEach(a => {
+            db.run(
+                `
+                INSERT INTO attendees (id, name, email, status)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET 
+                    name=excluded.name,
+                    email=excluded.email
+                `,
+                [
+                    a.id,
+                    a.profile?.name || "",
+                    a.profile?.email || "",
+                    "updated"
+                ]
+            );
+        });
+
+        res.json(attendees);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Failed to fetch attendees" });
+    }
+});
+
+/* ============================
+   Create HTTP + WebSocket Server
 ============================ */
 const server = http.createServer(app);
+
 const wss = new WebSocket.Server({ server, path: "/websocket" });
 
-wss.on("connection", (ws) => {
-    console.log("WebSocket client connected!");
-
+wss.on("connection", ws => {
+    console.log("WebSocket client connected.");
     ws.send(JSON.stringify({
         id: "welcome_001",
         name: "WebSocket Connected",
@@ -114,7 +150,6 @@ wss.on("connection", (ws) => {
         status: "connected"
     }));
 });
-
 
 function broadcastAttendeeUpdate(attendee) {
     const message = JSON.stringify(attendee);
@@ -131,9 +166,8 @@ function broadcastAttendeeUpdate(attendee) {
 app.post("/webhook", async (req, res) => {
     console.log("=== Eventbrite Webhook Received ===");
     console.log("Headers:", req.headers);
-    console.log("Body:", JSON.stringify(req.body, null, 2));
+    console.log("Body:", req.body);
 
-    // Immediately acknowledge receipt to Eventbrite
     res.json({ received: true });
 
     try {
@@ -144,32 +178,28 @@ app.post("/webhook", async (req, res) => {
         let attendeeData;
 
         if (apiUrl) {
-            const tokens = await getTokens();
-            if (!tokens) {
-                console.warn("No OAuth tokens stored, cannot fetch attendee");
+            const accessToken = process.env.EVENTBRITE_ACCESS_TOKEN;
+            if (!accessToken) {
+                console.warn("No EVENTBRITE_ACCESS_TOKEN set");
                 return;
             }
 
             const attendeeResp = await fetch(apiUrl, {
-                headers: { Authorization: `Bearer ${tokens.access_token}` }
+                headers: { Authorization: `Bearer ${accessToken}` }
             });
-
-            if (!attendeeResp.ok) {
-                console.error("Failed to fetch attendee from Eventbrite:", attendeeResp.status, await attendeeResp.text());
-                return;
-            }
 
             attendeeData = await attendeeResp.json();
 
             console.log("=== Full attendee JSON from Eventbrite ===");
             console.log(JSON.stringify(attendeeData, null, 2));
 
-            attendeeData.id = attendeeData.id || "unknown_id";
-            attendeeData.name = attendeeData.profile?.name || "Unknown";
-            attendeeData.email = attendeeData.profile?.email || "";
-            attendeeData.status = attendeeData.status || (attendeeData.checked_in ? "Checked In" : "Not Checked In");
+            attendeeData = {
+                id: attendeeData.id,
+                name: attendeeData.profile?.name || "Unknown",
+                email: attendeeData.profile?.email || "",
+                status: attendeeData.status || action
+            };
         } else {
-            // Test webhook: create a fake attendee
             attendeeData = {
                 id: "test_001",
                 name: "Test Attendee",
@@ -178,7 +208,6 @@ app.post("/webhook", async (req, res) => {
             };
         }
 
-        // Insert/update attendee in SQLite
         db.run(
             `
             INSERT INTO attendees (id, name, email, status)
@@ -192,28 +221,27 @@ app.post("/webhook", async (req, res) => {
             [attendeeData.id, attendeeData.name, attendeeData.email, attendeeData.status]
         );
 
-        console.log("Attendee updated in SQLite:", attendeeData);
+        console.log("Attendee updated:", attendeeData);
 
-        // Broadcast update via WebSocket
         broadcastAttendeeUpdate(attendeeData);
 
     } catch (err) {
-        console.error("Webhook processing error:", err);
+        console.error("Webhook error:", err);
     }
 });
 
 /* ============================
-   Fetch All Attendees Locally
+   Local Attendees
 ============================ */
 app.get("/local_attendees", (req, res) => {
-    db.all(`SELECT * FROM attendees ORDER BY updated_at DESC`, [], (err, rows) => {
+    db.all(`SELECT * FROM attendees`, [], (err, rows) => {
         if (err) return res.status(500).json({ error: "DB error" });
         res.json(rows);
     });
 });
 
 /* ============================
-   Start Server + WebSocket
+   Start Server
 ============================ */
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Backend + WebSocket running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
