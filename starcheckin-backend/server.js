@@ -12,33 +12,19 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// -------------------------------------------------------
-// ENV CHECK
-// -------------------------------------------------------
+// ENV check
 console.log("ENV Check:");
 console.log("CLIENT_ID:", process.env.CLIENT_ID ? "(set)" : "(missing)");
 console.log("CLIENT_SECRET:", process.env.CLIENT_SECRET ? "(set)" : "(missing)");
-console.log("EVENTBRITE_ACCESS_TOKEN: IGNORED — Using DB tokens only");
 
-// -------------------------------------------------------
-// DATABASE INIT
-// -------------------------------------------------------
-console.log("=== Initializing SQLite Database ===");
-
+// DATABASE SETUP
 const dbPath = path.join(__dirname, "sqlite.db");
-console.log("SQLite DB Path:", dbPath);
-
-const db = new sqlite3.Database(
-    dbPath,
-    sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE,
-    (err) => {
-        if (err) console.error("❌ DB Connection Error:", err);
-        else console.log("✅ SQLite Connected");
-    }
-);
+const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+    if (err) console.error("❌ DB Connection Error:", err);
+    else console.log("✅ SQLite Connected");
+});
 
 db.serialize(() => {
-    console.log("Creating tokens table if not exists...");
     db.run(`
         CREATE TABLE IF NOT EXISTS tokens (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,33 +33,39 @@ db.serialize(() => {
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     `);
-
-    console.log("Creating attendees table if not exists...");
     db.run(`
         CREATE TABLE IF NOT EXISTS attendees (
             id TEXT PRIMARY KEY,
+            event_id TEXT,
             name TEXT,
             email TEXT,
             status TEXT,
+            checked_in INTEGER,
+            answers TEXT,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     `);
 });
 
-// -------------------------------------------------------
-// TOKEN EXCHANGE
-// -------------------------------------------------------
+// HELPER: Get latest OAuth token
+function getTokens() {
+    return new Promise((resolve, reject) => {
+        db.get(`SELECT * FROM tokens ORDER BY id DESC LIMIT 1`, [], (err, row) => {
+            if (err) {
+                console.error("DB token fetch error:", err);
+                reject(err);
+            } else {
+                resolve(row);
+            }
+        });
+    });
+}
+
+// OAUTH CODE EXCHANGE
 app.post("/exchange_token", async (req, res) => {
-    console.log("\n=== POST /exchange_token ===");
-    console.log("Incoming body:", req.body);
-
     const { code } = req.body;
-    if (!code) {
-        console.warn("Missing OAuth code");
-        return res.status(400).json({ error: "Missing code" });
-    }
-
-    console.log("Exchanging OAuth code:", code);
+    console.log("Exchange token request received:", code);
+    if (!code) return res.status(400).json({ error: "Missing code" });
 
     const params = new URLSearchParams();
     params.append("client_id", process.env.CLIENT_ID);
@@ -89,22 +81,14 @@ app.post("/exchange_token", async (req, res) => {
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
             body: params.toString()
         });
-
         const data = await response.json();
         console.log("OAuth Response:", data);
 
-        console.log("Clearing old tokens...");
-        db.run(`DELETE FROM tokens`);
-
-        console.log("Inserting new tokens...");
-        db.run(
-            `INSERT INTO tokens (access_token, refresh_token) VALUES (?, ?)`,
-            [data.access_token, data.refresh_token],
-            (err) => {
-                if (err) console.error("Token insert error:", err);
-                else console.log("Tokens saved.");
-            }
-        );
+        db.run("DELETE FROM tokens");
+        db.run("INSERT INTO tokens (access_token, refresh_token) VALUES (?, ?)", [data.access_token, data.refresh_token], (err) => {
+            if (err) console.error("Error saving token:", err);
+            else console.log("✅ Tokens saved.");
+        });
 
         res.json(data);
     } catch (err) {
@@ -113,78 +97,60 @@ app.post("/exchange_token", async (req, res) => {
     }
 });
 
-// -------------------------------------------------------
-// GET TOKENS FROM DB
-// -------------------------------------------------------
-function getTokens() {
-    console.log("Fetching latest OAuth tokens from DB...");
-    return new Promise((resolve, reject) => {
-        db.get(
-            `SELECT * FROM tokens ORDER BY id DESC LIMIT 1`,
-            [],
-            (err, row) => {
-                if (err) {
-                    console.error("DB Token fetch error:", err);
-                    reject(err);
-                } else {
-                    console.log("Fetched tokens:", row);
-                    resolve(row);
-                }
-            }
-        );
-    });
-}
-
-// -------------------------------------------------------
-// FETCH ATTENDEES FROM EVENTBRITE
-// -------------------------------------------------------
-app.get("/attendees/:eventId", async (req, res) => {
-    console.log("\n=== GET /attendees ===");
-    console.log("Params:", req.params);
-
+// GET EVENTS
+app.get("/events", async (req, res) => {
+    console.log("GET /events called");
     try {
-        const { eventId } = req.params;
         const tokens = await getTokens();
+        if (!tokens) return res.status(400).json({ error: "No OAuth token stored" });
 
-        if (!tokens?.access_token) {
-            console.warn("❌ No OAuth token found in DB!");
-            return res.status(400).json({ error: "No OAuth tokens stored" });
-        }
-
-        console.log(`Fetching attendees for event: ${eventId}`);
-        console.log("Using access_token:", tokens.access_token);
-
-        const response = await fetch(
-            `https://www.eventbriteapi.com/v3/events/${eventId}/attendees/`,
-            { headers: { Authorization: `Bearer ${tokens.access_token}` } }
-        );
-
+        console.log("Fetching events from Eventbrite...");
+        const response = await fetch("https://www.eventbriteapi.com/v3/users/me/events/", {
+            headers: { Authorization: `Bearer ${tokens.access_token}` }
+        });
         const data = await response.json();
-        console.log("Eventbrite attendees response:", data);
+        console.log("Events fetched:", data.events?.length || 0);
 
+        res.json(data.events || []);
+    } catch (err) {
+        console.error("Fetch events error:", err);
+        res.status(500).json({ error: "Failed to fetch events" });
+    }
+});
+
+// GET ATTENDEES
+app.get("/attendees/:eventId", async (req, res) => {
+    const { eventId } = req.params;
+    console.log(`GET /attendees/${eventId} called`);
+    try {
+        const tokens = await getTokens();
+        if (!tokens) return res.status(400).json({ error: "No OAuth token stored" });
+
+        console.log(`Fetching attendees for event ${eventId}...`);
+        const response = await fetch(`https://www.eventbriteapi.com/v3/events/${eventId}/attendees/`, {
+            headers: { Authorization: `Bearer ${tokens.access_token}` }
+        });
+        const data = await response.json();
         const attendees = data.attendees || [];
+        console.log(`Fetched ${attendees.length} attendees`);
 
-        console.log(`Upserting ${attendees.length} attendees into SQLite...`);
         attendees.forEach(a => {
-            db.run(
-                `
-                INSERT INTO attendees (id, name, email, status)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET 
+            const answersStr = JSON.stringify(a.answers || []);
+            const checkedIn = a.checked_in ? 1 : 0;
+            db.run(`
+                INSERT INTO attendees (id, event_id, name, email, status, checked_in, answers)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
-                    email=excluded.email
-                `,
-                [
-                    a.id,
-                    a.profile?.name || "",
-                    a.profile?.email || "",
-                    "updated"
-                ],
-                (err) => {
-                    if (err) console.error("DB attendee insert/update error:", err);
-                    else console.log("Upserted attendee:", a.id);
-                }
-            );
+                    email=excluded.email,
+                    status=excluded.status,
+                    checked_in=excluded.checked_in,
+                    answers=excluded.answers,
+                    updated_at=CURRENT_TIMESTAMP
+            `, [a.id, eventId, a.profile?.name || "", a.profile?.email || "", a.status || "", checkedIn, answersStr], (err) => {
+                if (err) console.error("DB insert error:", err);
+                else console.log(`Upserted attendee ${a.id}`);
+            });
         });
 
         res.json(attendees);
@@ -194,11 +160,7 @@ app.get("/attendees/:eventId", async (req, res) => {
     }
 });
 
-// -------------------------------------------------------
-// WEBSOCKET SERVER
-// -------------------------------------------------------
-console.log("Starting WebSocket server...");
-
+// WEBSOCKET SETUP
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server, path: "/websocket" });
 
@@ -207,133 +169,18 @@ wss.on("connection", ws => {
     ws.on("close", () => console.log("❌ WebSocket client disconnected"));
     ws.on("error", err => console.error("WebSocket error:", err));
 
-    console.log("Sending welcome packet...");
-    ws.send(JSON.stringify({
-        id: "welcome_001",
-        name: "WebSocket Connected",
-        email: "",
-        status: "connected"
-    }));
+    ws.send(JSON.stringify({ id: "welcome_001", name: "WebSocket Connected", status: "connected" }));
 });
 
 function broadcastAttendeeUpdate(attendee) {
-    console.log("📢 Broadcasting attendee update:", attendee);
-    console.log("Connected clients:", wss.clients.size);
-
-    const message = JSON.stringify(attendee);
-
+    const msg = JSON.stringify(attendee);
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
-            console.log("Sending update to a client...");
-            client.send(message);
+            client.send(msg);
         }
     });
 }
 
-// -------------------------------------------------------
-// WEBHOOK ENDPOINT — **UPDATED TO USE DB TOKEN**
-// -------------------------------------------------------
-app.post("/webhook", async (req, res) => {
-    console.log("\n=== Eventbrite Webhook Received ===");
-    console.log("Headers:", req.headers);
-    console.log("Body:", req.body);
-
-    res.json({ received: true });
-
-    try {
-        const body = req.body;
-        const apiUrl = body?.api_url;
-        const action = body?.config?.action || "updated";
-
-        console.log("Webhook api_url:", apiUrl);
-        console.log("Webhook action:", action);
-
-        const tokens = await getTokens();
-        const accessToken = tokens?.access_token;
-
-        if (!accessToken) {
-            console.warn("❌ No DB OAuth token available. Cannot fetch webhook attendee.");
-            return;
-        }
-
-        let attendeeData;
-
-        if (apiUrl) {
-            console.log(`Fetching attendee from Eventbrite using DB token...`);
-            console.log("Access token:", accessToken);
-
-            const attendeeResp = await fetch(apiUrl, {
-                headers: { Authorization: `Bearer ${accessToken}` }
-            });
-
-            attendeeData = await attendeeResp.json();
-
-            console.log("Full attendee JSON from Eventbrite:");
-            console.log(JSON.stringify(attendeeData, null, 2));
-
-            attendeeData = {
-                id: attendeeData.id,
-                name: attendeeData.profile?.name || "Unknown",
-                email: attendeeData.profile?.email || "",
-                status: attendeeData.status || action
-            };
-        } else {
-            console.log("No api_url — using test payload");
-            attendeeData = {
-                id: "test_001",
-                name: "Test Attendee",
-                email: "test@example.com",
-                status: action
-            };
-        }
-
-        console.log("Upserting attendee into DB:", attendeeData);
-
-        db.run(
-            `
-            INSERT INTO attendees (id, name, email, status)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET 
-                name=excluded.name,
-                email=excluded.email,
-                status=excluded.status,
-                updated_at=CURRENT_TIMESTAMP
-            `,
-            [attendeeData.id, attendeeData.name, attendeeData.email, attendeeData.status],
-            (err) => {
-                if (err) console.error("DB error inserting attendee:", err);
-                else console.log("DB attendee updated:", attendeeData);
-            }
-        );
-
-        broadcastAttendeeUpdate(attendeeData);
-
-    } catch (err) {
-        console.error("Webhook processing error:", err);
-    }
-});
-
-// -------------------------------------------------------
-// LOCAL ATTENDEE FETCH
-// -------------------------------------------------------
-app.get("/local_attendees", (req, res) => {
-    console.log("\n=== GET /local_attendees ===");
-
-    db.all(`SELECT * FROM attendees`, [], (err, rows) => {
-        if (err) {
-            console.error("Local attendees DB error:", err);
-            return res.status(500).json({ error: "DB error" });
-        }
-        console.log("Returning attendees:", rows.length);
-        res.json(rows);
-    });
-});
-
-// -------------------------------------------------------
 // START SERVER
-// -------------------------------------------------------
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`\n🚀 Backend running on port ${PORT}`);
-    console.log("=====================================================\n");
-});
+server.listen(PORT, () => console.log(`🚀 Backend running on port ${PORT}`));
