@@ -1,186 +1,130 @@
-const express = require("express");
-const fetch = require("node-fetch");
-const cors = require("cors");
-const sqlite3 = require("sqlite3").verbose();
-const path = require("path");
-const http = require("http");
-const WebSocket = require("ws");
-
-console.log("=== Starting backend... ===");
+// server.js
+require('dotenv').config();
+const express = require('express');
+const axios = require('axios');
+const bodyParser = require('body-parser');
 
 const app = express();
-app.use(express.json());
-app.use(cors());
+const PORT = process.env.PORT || 3000;
 
-// ENV check
-console.log("ENV Check:");
-console.log("CLIENT_ID:", process.env.CLIENT_ID ? "(set)" : "(missing)");
-console.log("CLIENT_SECRET:", process.env.CLIENT_SECRET ? "(set)" : "(missing)");
+const CLIENT_ID = process.env.CLIENT_ID;
+const CLIENT_SECRET = process.env.CLIENT_SECRET;
 
-// DATABASE SETUP
-const dbPath = path.join(__dirname, "sqlite.db");
-const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
-    if (err) console.error("❌ DB Connection Error:", err);
-    else console.log("✅ SQLite Connected");
+let accessToken = null;
+let refreshToken = null;
+
+app.use(bodyParser.json());
+
+// Logging middleware
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    console.log('Headers:', req.headers);
+    console.log('Body:', req.body);
+    next();
 });
 
-db.serialize(() => {
-    db.run(`
-        CREATE TABLE IF NOT EXISTS tokens (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            access_token TEXT NOT NULL,
-            refresh_token TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
-    db.run(`
-        CREATE TABLE IF NOT EXISTS attendees (
-            id TEXT PRIMARY KEY,
-            event_id TEXT,
-            name TEXT,
-            email TEXT,
-            status TEXT,
-            checked_in INTEGER,
-            answers TEXT,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+// Save OAuth tokens from Android
+app.post('/save_token', (req, res) => {
+    accessToken = req.body.access_token;
+    refreshToken = req.body.refresh_token;
+    console.log('Saved access token:', accessToken);
+    console.log('Saved refresh token:', refreshToken);
+    res.json({ status: 'ok' });
 });
 
-// HELPER: Get latest OAuth token
-function getTokens() {
-    return new Promise((resolve, reject) => {
-        db.get(`SELECT * FROM tokens ORDER BY id DESC LIMIT 1`, [], (err, row) => {
-            if (err) {
-                console.error("DB token fetch error:", err);
-                reject(err);
-            } else {
-                resolve(row);
+// Exchange Eventbrite code for token (optional if you want backend to do this)
+app.post('/exchange_token', async (req, res) => {
+    const { code } = req.body;
+    console.log('Received OAuth code:', code);
+
+    try {
+        const response = await axios.post('https://www.eventbrite.com/oauth/token', null, {
+            params: {
+                code,
+                client_secret: CLIENT_SECRET,
+                client_id: CLIENT_ID,
+                grant_type: 'authorization_code'
             }
         });
-    });
-}
 
-// OAUTH CODE EXCHANGE
-app.post("/exchange_token", async (req, res) => {
-    const { code } = req.body;
-    console.log("Exchange token request received:", code);
-    if (!code) return res.status(400).json({ error: "Missing code" });
+        accessToken = response.data.access_token;
+        refreshToken = response.data.refresh_token;
 
-    const params = new URLSearchParams();
-    params.append("client_id", process.env.CLIENT_ID);
-    params.append("client_secret", process.env.CLIENT_SECRET);
-    params.append("code", code);
-    params.append("redirect_uri", "https://star-check-in-oauth-redirect.onrender.com/eventbrite-callback.html");
-    params.append("grant_type", "authorization_code");
+        console.log('Received access token:', accessToken);
+        console.log('Received refresh token:', refreshToken);
 
-    try {
-        console.log("Calling Eventbrite OAuth...");
-        const response = await fetch("https://www.eventbrite.com/oauth/token", {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: params.toString()
+        res.json({
+            access_token: accessToken,
+            refresh_token: refreshToken
         });
-        const data = await response.json();
-        console.log("OAuth Response:", data);
-
-        db.run("DELETE FROM tokens");
-        db.run("INSERT INTO tokens (access_token, refresh_token) VALUES (?, ?)", [data.access_token, data.refresh_token], (err) => {
-            if (err) console.error("Error saving token:", err);
-            else console.log("✅ Tokens saved.");
-        });
-
-        res.json(data);
     } catch (err) {
-        console.error("Token exchange error:", err);
-        res.status(500).json({ error: "Token exchange failed" });
+        console.error('Error exchanging code:', err.response?.data || err.message);
+        res.status(500).json({ error: 'Token exchange failed', details: err.response?.data || err.message });
     }
 });
 
-// GET EVENTS
-app.get("/events", async (req, res) => {
-    console.log("GET /events called");
+// Get list of events
+app.get('/events', async (req, res) => {
+    if (!accessToken) {
+        return res.status(401).json({ error: 'No access token saved' });
+    }
+
     try {
-        const tokens = await getTokens();
-        if (!tokens) return res.status(400).json({ error: "No OAuth token stored" });
-
-        console.log("Fetching events from Eventbrite...");
-        const response = await fetch("https://www.eventbriteapi.com/v3/users/me/events/", {
-            headers: { Authorization: `Bearer ${tokens.access_token}` }
+        const response = await axios.get('https://www.eventbriteapi.com/v3/users/me/events/', {
+            headers: { Authorization: `Bearer ${accessToken}` }
         });
-        const data = await response.json();
-        console.log("Events fetched:", data.events?.length || 0);
 
-        res.json(data.events || []);
+        const events = response.data.events.map(ev => ({
+            id: ev.id,
+            name: ev.name.text
+        }));
+
+        console.log('Fetched events:', events);
+        res.json(events);
     } catch (err) {
-        console.error("Fetch events error:", err);
-        res.status(500).json({ error: "Failed to fetch events" });
+        console.error('Error fetching events:', err.response?.data || err.message);
+        res.status(500).json({ error: 'Failed to fetch events', details: err.response?.data || err.message });
     }
 });
 
-// GET ATTENDEES
-app.get("/attendees/:eventId", async (req, res) => {
+// Get attendees for an event
+app.get('/attendees/:eventId', async (req, res) => {
     const { eventId } = req.params;
-    console.log(`GET /attendees/${eventId} called`);
+
+    if (!accessToken) {
+        return res.status(401).json({ error: 'No access token saved' });
+    }
+
     try {
-        const tokens = await getTokens();
-        if (!tokens) return res.status(400).json({ error: "No OAuth token stored" });
-
-        console.log(`Fetching attendees for event ${eventId}...`);
-        const response = await fetch(`https://www.eventbriteapi.com/v3/events/${eventId}/attendees/`, {
-            headers: { Authorization: `Bearer ${tokens.access_token}` }
-        });
-        const data = await response.json();
-        const attendees = data.attendees || [];
-        console.log(`Fetched ${attendees.length} attendees`);
-
-        attendees.forEach(a => {
-            const answersStr = JSON.stringify(a.answers || []);
-            const checkedIn = a.checked_in ? 1 : 0;
-            db.run(`
-                INSERT INTO attendees (id, event_id, name, email, status, checked_in, answers)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    name=excluded.name,
-                    email=excluded.email,
-                    status=excluded.status,
-                    checked_in=excluded.checked_in,
-                    answers=excluded.answers,
-                    updated_at=CURRENT_TIMESTAMP
-            `, [a.id, eventId, a.profile?.name || "", a.profile?.email || "", a.status || "", checkedIn, answersStr], (err) => {
-                if (err) console.error("DB insert error:", err);
-                else console.log(`Upserted attendee ${a.id}`);
-            });
+        const response = await axios.get(`https://www.eventbriteapi.com/v3/events/${eventId}/attendees/`, {
+            headers: { Authorization: `Bearer ${accessToken}` }
         });
 
+        const attendees = response.data.attendees.map(a => ({
+            id: a.id,
+            name: a.profile.name,
+            email: a.profile.email,
+            status: a.status,
+            checked_in: a.checked_in,
+            answers: a.answers?.reduce((acc, ans) => {
+                acc[ans.question] = ans.answer;
+                return acc;
+            }, {}) || {}
+        }));
+
+        console.log(`Fetched attendees for event ${eventId}:`, attendees);
         res.json(attendees);
     } catch (err) {
-        console.error("Fetch attendees error:", err);
-        res.status(500).json({ error: "Failed to fetch attendees" });
+        console.error('Error fetching attendees:', err.response?.data || err.message);
+        res.status(500).json({ error: 'Failed to fetch attendees', details: err.response?.data || err.message });
     }
 });
 
-// WEBSOCKET SETUP
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server, path: "/websocket" });
-
-wss.on("connection", ws => {
-    console.log("🔌 WebSocket client connected.");
-    ws.on("close", () => console.log("❌ WebSocket client disconnected"));
-    ws.on("error", err => console.error("WebSocket error:", err));
-
-    ws.send(JSON.stringify({ id: "welcome_001", name: "WebSocket Connected", status: "connected" }));
+// Simple health check
+app.get('/', (req, res) => {
+    res.send('Star Check-In backend is running');
 });
 
-function broadcastAttendeeUpdate(attendee) {
-    const msg = JSON.stringify(attendee);
-    wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(msg);
-        }
-    });
-}
-
-// START SERVER
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 Backend running on port ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});
