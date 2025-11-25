@@ -4,16 +4,27 @@
     <meta charset="UTF-8">
     <title>Eventbrite OAuth Redirect</title>
     <script>
-        // Extract authorization code from URL
         const params = new URLSearchParams(window.location.search);
         const authCode = params.get("code");
         const error = params.get("error");
 
         if (authCode) {
-            // Redirect to your Android app with custom scheme
-            window.location.href = "starcheckin://auth?code=" + authCode;
+            // POST the code to your backend
+            fetch("https://starcheckin-backend.onrender.com/exchange_token", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ code: authCode })
+            })
+            .then(res => res.json())
+            .then(data => {
+                document.body.innerHTML = "<p>Login complete! You can close this page.</p>";
+            })
+            .catch(err => {
+                document.body.innerHTML = "<p>Error exchanging code. Try again.</p>";
+                console.error(err);
+            });
         } else if (error) {
-            alert("Authorization failed: " + error);
+            document.body.innerHTML = "<p>Authorization failed: " + error + "</p>";
         }
     </script>
 </head>
