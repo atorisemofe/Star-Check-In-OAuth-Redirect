@@ -24,12 +24,14 @@
         const error = params.get("error");
 
         function redirectToApp(token) {
+            // Trigger deep link
             window.location.href = `starcheckin://auth?access_token=${encodeURIComponent(token)}`;
         }
 
         if (authCode) {
             document.body.innerHTML = "<p>Exchanging code...</p>";
 
+            // POST the code to your backend
             fetch("https://starcheckin-backend.onrender.com/exchange_token", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -40,13 +42,16 @@
                 if (data.access_token) {
                     const token = data.access_token;
 
-                    // Always show button for user gesture
+                    // Show button in case automatic redirect fails
                     document.body.innerHTML = `
-                        <p>Login complete! Tap the button below to open the app:</p>
+                        <p>Login complete! The app should open automatically.</p>
                         <button onclick="redirectToApp('${token}')">Open App</button>
                         <p>Or copy this token manually:</p>
                         <textarea readonly style="width: 90%; height: 50px;">${token}</textarea>
                     `;
+
+                    // Try automatic redirect after short delay
+                    setTimeout(() => redirectToApp(token), 500);
                 } else {
                     document.body.innerHTML = "<p>Token exchange failed. Try again.</p>";
                     console.error("No access token in response:", data);
