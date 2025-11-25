@@ -3,13 +3,45 @@
 <head>
     <meta charset="UTF-8">
     <title>Eventbrite OAuth Redirect</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin-top: 80px;
+        }
+        button {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 16px;
+        }
+        textarea {
+            margin-top: 20px;
+            width: 90%;
+            height: 50px;
+        }
+    </style>
     <script>
         const params = new URLSearchParams(window.location.search);
         const authCode = params.get("code");
         const error = params.get("error");
 
+        function redirectToApp(token) {
+            window.location.href = `starcheckin://auth?access_token=${encodeURIComponent(token)}`;
+        }
+
+        function tryRedirect(token, attempts = 0) {
+            if (attempts >= 5) return; // stop after 5 attempts
+            try {
+                redirectToApp(token);
+            } catch (err) {
+                console.warn("Redirect failed, retrying...");
+                setTimeout(() => tryRedirect(token, attempts + 1), 500);
+            }
+        }
+
         if (authCode) {
-            // POST the code to your backend
+            document.body.innerHTML = "<p>Exchanging code...</p>";
+
             fetch("https://starcheckin-backend.onrender.com/exchange_token", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -17,14 +49,33 @@
             })
             .then(res => res.json())
             .then(data => {
-                document.body.innerHTML = "<p>Login complete! You can close this page.</p>";
+                if (data.access_token) {
+                    const token = data.access_token;
+
+                    // Show manual button & textarea
+                    document.body.innerHTML = `
+                        <p>Login complete! The app should open automatically.</p>
+                        <button onclick="redirectToApp('${token}')">Open App</button>
+                        <p>Or copy this token manually:</p>
+                        <textarea readonly>${token}</textarea>
+                    `;
+
+                    // Automatic redirect with retry
+                    setTimeout(() => tryRedirect(token), 300);
+                } else {
+                    document.body.innerHTML = "<p>Token exchange failed. Try again.</p>";
+                    console.error("No access token in response:", data);
+                }
             })
             .catch(err => {
                 document.body.innerHTML = "<p>Error exchanging code. Try again.</p>";
                 console.error(err);
             });
+
         } else if (error) {
-            document.body.innerHTML = "<p>Authorization failed: " + error + "</p>";
+            document.body.innerHTML = `<p>Authorization failed: ${error}</p>`;
+        } else {
+            document.body.innerHTML = "<p>No code received from Eventbrite.</p>";
         }
     </script>
 </head>
