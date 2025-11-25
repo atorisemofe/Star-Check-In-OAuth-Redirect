@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const bodyParser = require('body-parser');
-const cors = require('cors');
+const qs = require('qs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -13,41 +13,60 @@ const CLIENT_SECRET = process.env.CLIENT_SECRET;
 let accessToken = null;
 let refreshToken = null;
 
-app.use(cors());
 app.use(bodyParser.json());
 
-console.log("Server starting...");
+// ----------------- Logging middleware -----------------
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    console.log('Headers:', req.headers);
+    console.log('Body:', req.body);
+    next();
+});
 
-// Exchange code for tokens
+// ----------------- Save tokens manually -----------------
+app.post('/save_token', (req, res) => {
+    accessToken = req.body.access_token;
+    refreshToken = req.body.refresh_token;
+    console.log('Saved access token:', accessToken);
+    console.log('Saved refresh token:', refreshToken);
+    res.json({ status: 'ok' });
+});
+
+// ----------------- Exchange OAuth code for token -----------------
 app.post('/exchange_token', async (req, res) => {
     const { code } = req.body;
-    if (!code) return res.status(400).json({ error: 'Code is required' });
+    console.log('Received OAuth code:', code);
+
+    if (!code) return res.status(400).json({ error: 'No code provided' });
 
     try {
-        const response = await axios.post('https://www.eventbrite.com/oauth/token', null, {
-            params: {
+        const response = await axios.post(
+            'https://www.eventbrite.com/oauth/token',
+            qs.stringify({
                 code,
                 client_secret: CLIENT_SECRET,
                 client_id: CLIENT_ID,
                 grant_type: 'authorization_code'
-            }
-        });
+            }),
+            { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+        );
 
         accessToken = response.data.access_token;
         refreshToken = response.data.refresh_token;
 
-        console.log('Saved access token:', accessToken);
+        console.log('Access token:', accessToken);
+        console.log('Refresh token:', refreshToken);
 
-        res.json({ status: 'ok' });
+        res.json({ access_token: accessToken, refresh_token: refreshToken });
     } catch (err) {
         console.error('Error exchanging code:', err.response?.data || err.message);
         res.status(500).json({ error: 'Token exchange failed', details: err.response?.data || err.message });
     }
 });
 
-// Get events
+// ----------------- Get list of events -----------------
 app.get('/events', async (req, res) => {
-    if (!accessToken) return res.status(401).json({ error: 'No access token' });
+    if (!accessToken) return res.status(401).json({ error: 'No access token saved' });
 
     try {
         const response = await axios.get('https://www.eventbriteapi.com/v3/users/me/events/', {
@@ -59,6 +78,7 @@ app.get('/events', async (req, res) => {
             name: ev.name.text
         }));
 
+        console.log('Fetched events:', events);
         res.json(events);
     } catch (err) {
         console.error('Error fetching events:', err.response?.data || err.message);
@@ -66,10 +86,10 @@ app.get('/events', async (req, res) => {
     }
 });
 
-// Get attendees
+// ----------------- Get attendees for an event -----------------
 app.get('/attendees/:eventId', async (req, res) => {
     const { eventId } = req.params;
-    if (!accessToken) return res.status(401).json({ error: 'No access token' });
+    if (!accessToken) return res.status(401).json({ error: 'No access token saved' });
 
     try {
         const response = await axios.get(`https://www.eventbriteapi.com/v3/events/${eventId}/attendees/`, {
@@ -88,11 +108,15 @@ app.get('/attendees/:eventId', async (req, res) => {
             }, {}) || {}
         }));
 
+        console.log(`Fetched attendees for event ${eventId}:`, attendees);
         res.json(attendees);
     } catch (err) {
         console.error('Error fetching attendees:', err.response?.data || err.message);
         res.status(500).json({ error: 'Failed to fetch attendees', details: err.response?.data || err.message });
     }
 });
+
+// ----------------- Health check -----------------
+app.get('/', (req, res) => res.send('Star Check-In backend is running'));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
