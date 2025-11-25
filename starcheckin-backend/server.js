@@ -98,26 +98,50 @@ app.post('/exchange_token', async (req, res) => {
 
 
 // ----------------- Get list of events -----------------
+// ----------------- Get list of events across all organizations -----------------
 app.get('/events', async (req, res) => {
     if (!accessToken) return res.status(401).json({ error: 'No access token saved' });
 
     try {
-        const response = await axios.get('https://www.eventbriteapi.com/v3/users/me/events/', {
+        // Step 1: Get all organizations for the user
+        const orgResponse = await axios.get('https://www.eventbriteapi.com/v3/users/me/organizations/', {
             headers: { Authorization: `Bearer ${accessToken}` }
         });
 
-        const events = response.data.events.map(ev => ({
-            id: ev.id,
-            name: ev.name.text
-        }));
+        const orgs = orgResponse.data.organizations;
+        if (!orgs || orgs.length === 0) {
+            return res.status(404).json({ error: 'No organizations found for user' });
+        }
 
-        console.log('Fetched events:', events);
-        res.json(events);
+        // Step 2: Fetch events for each organization
+        const allEvents = [];
+        for (let org of orgs) {
+            try {
+                const eventsResponse = await axios.get(`https://www.eventbriteapi.com/v3/organizations/${org.id}/events/`, {
+                    headers: { Authorization: `Bearer ${accessToken}` }
+                });
+
+                const orgEvents = eventsResponse.data.events.map(ev => ({
+                    id: ev.id,
+                    name: ev.name.text,
+                    org_name: org.name
+                }));
+
+                allEvents.push(...orgEvents);
+            } catch (err) {
+                console.error(`Failed to fetch events for org ${org.id}:`, err.response?.data || err.message);
+            }
+        }
+
+        console.log('Fetched all events:', allEvents);
+        res.json(allEvents);
+
     } catch (err) {
-        console.error('Error fetching events:', err.response?.data || err.message);
+        console.error('Error fetching organizations or events:', err.response?.data || err.message);
         res.status(500).json({ error: 'Failed to fetch events', details: err.response?.data || err.message });
     }
 });
+
 
 // ----------------- Get attendees for an event -----------------
 app.get('/attendees/:eventId', async (req, res) => {
