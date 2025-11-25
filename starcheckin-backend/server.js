@@ -220,7 +220,7 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 // Broadcast helper
-function broadcastEvent(eventId: string) {
+function broadcastEvent(eventId) {
     const message = JSON.stringify({ type: 'attendee_update', eventId });
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
