@@ -173,6 +173,90 @@ app.get('/attendees/:eventId', async (req, res) => {
     }
 });
 
+// // ----------------- Webhook endpoint -----------------
+// app.post('/webhook', async (req, res) => {
+//     try {
+//         const eventType = req.headers['x-eventbrite-event'];
+//         const deliveryId = req.headers['x-eventbrite-delivery'];
+//         const payload = req.body;
+
+//         console.log(`Received Eventbrite webhook: ${eventType} (delivery ${deliveryId})`);
+//         console.log('Payload:', JSON.stringify(payload, null, 2));
+
+//         // For attendee.updated or attendee.created events, you may want to reload attendee data
+//         if (eventType?.startsWith('attendee.')) {
+//             const attendeeApiUrl = payload.api_url;
+//             console.log('Fetching updated attendee info from:', attendeeApiUrl);
+
+//             // Optional: Fetch the attendee data from Eventbrite immediately
+//             const response = await axios.get(attendeeApiUrl, {
+//                 headers: { Authorization: `Bearer ${accessToken}` }
+//             });
+
+//             const updatedAttendee = response.data;
+//             console.log('Updated attendee details:', updatedAttendee);
+
+//             // TODO: Broadcast to your Android app via a WebSocket, push notification, or refresh endpoint
+//             // Example: Notify connected clients to refetch attendees for the event
+//         }
+
+//         // Respond immediately to Eventbrite to acknowledge delivery
+//         res.json({ received: true });
+//     } catch (err) {
+//         console.error('Error handling webhook:', err.response?.data || err.message);
+//         res.status(500).json({ error: 'Failed to process webhook', details: err.response?.data || err.message });
+//     }
+// });
+
+// ----------------- WebSocket server -----------------
+const wss = new WebSocket.Server({ noServer: true });
+const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+server.on('upgrade', (request, socket, head) => {
+    wss.handleUpgrade(request, socket, head, ws => {
+        wss.emit('connection', ws, request);
+    });
+});
+
+// Broadcast helper
+function broadcastEvent(eventId: string) {
+    const message = JSON.stringify({ type: 'attendee_update', eventId });
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(message);
+        }
+    });
+}
+
+// ----------------- Webhook endpoint -----------------
+app.post('/webhook', async (req, res) => {
+    try {
+        const eventType = req.headers['x-eventbrite-event'];
+        const deliveryId = req.headers['x-eventbrite-delivery'];
+        const payload = req.body;
+
+        console.log(`Webhook: ${eventType} (delivery ${deliveryId})`);
+        console.log('Payload:', JSON.stringify(payload, null, 2));
+
+        if (eventType?.startsWith('attendee.')) {
+            const attendeeApiUrl = payload.api_url;
+            const response = await axios.get(attendeeApiUrl, {
+                headers: { Authorization: `Bearer ${accessToken}` }
+            });
+
+            const updatedAttendee = response.data;
+            const eventId = updatedAttendee.event_id || payload.config?.event_id;
+            if (eventId) broadcastEvent(eventId);
+        }
+
+        res.json({ received: true });
+    } catch (err) {
+        console.error('Error handling webhook:', err.response?.data || err.message);
+        res.status(500).json({ error: 'Failed to process webhook', details: err.response?.data || err.message });
+    }
+});
+
+
 // ----------------- Health check -----------------
 app.get('/', (req, res) => res.send('Star Check-In backend is running'));
 
