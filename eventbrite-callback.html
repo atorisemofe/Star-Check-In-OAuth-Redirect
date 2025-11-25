@@ -1,88 +1,23 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Eventbrite OAuth Redirect</title>
-<style>
-    body {
-        font-family: Arial, sans-serif;
-        text-align: center;
-        margin-top: 80px;
-    }
-    button {
-        margin-top: 20px;
-        padding: 10px 20px;
-        font-size: 16px;
-    }
-    textarea {
-        margin-top: 20px;
-        width: 90%;
-        height: 50px;
-    }
-</style>
-<script>
-    // Parse query parameters from Eventbrite redirect
-    const params = new URLSearchParams(window.location.search);
-    const authCode = params.get("code");
-    const error = params.get("error");
+    <meta charset="UTF-8">
+    <title>Eventbrite OAuth Redirect</title>
+    <script>
+        // Extract authorization code from URL
+        const params = new URLSearchParams(window.location.search);
+        const authCode = params.get("code");
+        const error = params.get("error");
 
-    // Elements for status, button, and token display
-    const statusEl = document.createElement("p");
-    statusEl.id = "status";
-    statusEl.textContent = "Completing login...";
-    document.body.appendChild(statusEl);
-
-    function redirectToApp(token) {
-        window.location.href = `starcheckin://auth?access_token=${encodeURIComponent(token)}`;
-    }
-
-    if (authCode) {
-        statusEl.textContent = "Exchanging code...";
-
-        fetch("https://starcheckin-backend.onrender.com/exchange_token", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ code: authCode })
-        })
-        .then(res => res.json())
-        .then(data => {
-            if (data.access_token) {
-                const token = data.access_token;
-
-                statusEl.textContent = "Login complete! The app should open automatically.";
-
-                // Manual button
-                const button = document.createElement("button");
-                button.textContent = "Open App";
-                button.onclick = () => redirectToApp(token);
-                document.body.appendChild(button);
-
-                // Manual token copy
-                const textarea = document.createElement("textarea");
-                textarea.value = token;
-                textarea.readOnly = true;
-                document.body.appendChild(textarea);
-
-                // Automatic redirect after short delay
-                setTimeout(() => redirectToApp(token), 500);
-
-            } else {
-                statusEl.textContent = "Token exchange failed. Try again.";
-                console.error("No access token in response:", data);
-            }
-        })
-        .catch(err => {
-            statusEl.textContent = "Error exchanging code. Try again.";
-            console.error(err);
-        });
-
-    } else if (error) {
-        statusEl.textContent = "Authorization failed: " + error;
-    } else {
-        statusEl.textContent = "No code received from Eventbrite.";
-    }
-</script>
+        if (authCode) {
+            // Redirect to your Android app with custom scheme
+            window.location.href = "starcheckin://auth?code=" + authCode;
+        } else if (error) {
+            alert("Authorization failed: " + error);
+        }
+    </script>
 </head>
 <body>
+    <p>Completing login...</p>
 </body>
 </html>
