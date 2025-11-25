@@ -43,6 +43,7 @@ app.post('/exchange_token', async (req, res) => {
         params.append('code', code);
         params.append('client_secret', CLIENT_SECRET);
         params.append('client_id', CLIENT_ID);
+        params.append("redirect_uri", "https://star-check-in-oauth-redirect.onrender.com/eventbrite-callback.html");
         params.append('grant_type', 'authorization_code');
 
         const response = await axios.post(
