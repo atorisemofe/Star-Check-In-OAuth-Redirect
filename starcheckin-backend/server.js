@@ -38,14 +38,20 @@ app.post('/exchange_token', async (req, res) => {
     console.log('Received OAuth code:', code);
 
     try {
-        const response = await axios.post('https://www.eventbrite.com/oauth/token', null, {
-            params: {
-                code,
+        const response = await axios.post(
+            'https://www.eventbrite.com/oauth/token',
+            new URLSearchParams({
+                code: code,
                 client_secret: CLIENT_SECRET,
                 client_id: CLIENT_ID,
                 grant_type: 'authorization_code'
+            }),
+            {
+                headers: { 
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
             }
-        });
+        );
 
         accessToken = response.data.access_token;
         refreshToken = response.data.refresh_token;
@@ -57,11 +63,16 @@ app.post('/exchange_token', async (req, res) => {
             access_token: accessToken,
             refresh_token: refreshToken
         });
+
     } catch (err) {
         console.error('Error exchanging code:', err.response?.data || err.message);
-        res.status(500).json({ error: 'Token exchange failed', details: err.response?.data || err.message });
+        res.status(500).json({ 
+            error: 'Token exchange failed', 
+            details: err.response?.data || err.message 
+        });
     }
 });
+
 
 // Get list of events
 app.get('/events', async (req, res) => {
