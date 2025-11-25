@@ -3,34 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <title>Eventbrite OAuth Redirect</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            margin-top: 100px;
-        }
-        button {
-            margin-top: 20px;
-            padding: 10px 20px;
-            font-size: 16px;
-        }
-        textarea {
-            margin-top: 20px;
-        }
-    </style>
     <script>
         const params = new URLSearchParams(window.location.search);
         const authCode = params.get("code");
         const error = params.get("error");
 
-        function redirectToApp(token) {
-            // Trigger deep link
-            window.location.href = `starcheckin://auth?access_token=${encodeURIComponent(token)}`;
-        }
-
         if (authCode) {
-            document.body.innerHTML = "<p>Exchanging code...</p>";
-
             // POST the code to your backend
             fetch("https://starcheckin-backend.onrender.com/exchange_token", {
                 method: "POST",
@@ -39,33 +17,14 @@
             })
             .then(res => res.json())
             .then(data => {
-                if (data.access_token) {
-                    const token = data.access_token;
-
-                    // Show button in case automatic redirect fails
-                    document.body.innerHTML = `
-                        <p>Login complete! The app should open automatically.</p>
-                        <button onclick="redirectToApp('${token}')">Open App</button>
-                        <p>Or copy this token manually:</p>
-                        <textarea readonly style="width: 90%; height: 50px;">${token}</textarea>
-                    `;
-
-                    // Try automatic redirect after short delay
-                    setTimeout(() => redirectToApp(token), 500);
-                } else {
-                    document.body.innerHTML = "<p>Token exchange failed. Try again.</p>";
-                    console.error("No access token in response:", data);
-                }
+                document.body.innerHTML = "<p>Login complete! You can close this page.</p>";
             })
             .catch(err => {
                 document.body.innerHTML = "<p>Error exchanging code. Try again.</p>";
                 console.error(err);
             });
-
         } else if (error) {
             document.body.innerHTML = "<p>Authorization failed: " + error + "</p>";
-        } else {
-            document.body.innerHTML = "<p>No code received from Eventbrite.</p>";
         }
     </script>
 </head>
