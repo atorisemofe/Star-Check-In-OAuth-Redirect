@@ -28,7 +28,7 @@
         }
 
         if (authCode) {
-            document.body.innerHTML = "<p>Completing login...</p>";
+            document.body.innerHTML = "<p>Exchanging code...</p>";
 
             fetch("https://starcheckin-backend.onrender.com/exchange_token", {
                 method: "POST",
@@ -37,23 +37,16 @@
             })
             .then(res => res.json())
             .then(data => {
-                console.log("Backend response:", data);
                 if (data.access_token) {
                     const token = data.access_token;
 
-                    // Try automatic redirect
-                    redirectToApp(token);
-
-                    // Add fallback button for user gesture
-                    setTimeout(() => {
-                        document.body.innerHTML = `
-                            <p>If your app didn't open automatically, tap the button below:</p>
-                            <button onclick="redirectToApp('${token}')">Open App</button>
-                            <p>Or copy this token manually:</p>
-                            <textarea readonly style="width: 90%; height: 50px;">${token}</textarea>
-                        `;
-                    }, 1000);
-
+                    // Always show button for user gesture
+                    document.body.innerHTML = `
+                        <p>Login complete! Tap the button below to open the app:</p>
+                        <button onclick="redirectToApp('${token}')">Open App</button>
+                        <p>Or copy this token manually:</p>
+                        <textarea readonly style="width: 90%; height: 50px;">${token}</textarea>
+                    `;
                 } else {
                     document.body.innerHTML = "<p>Token exchange failed. Try again.</p>";
                     console.error("No access token in response:", data);
