@@ -36,15 +36,33 @@ app.post('/save_token', (req, res) => {
 app.post('/exchange_token', async (req, res) => {
     const { code } = req.body;
 
-    if (!code) return res.status(400).json({ error: 'Missing code' });
+    // Log incoming code
+    console.log('Received code from frontend:', code);
+
+    // Check for missing code
+    if (!code) {
+        console.error('No authorization code provided!');
+        return res.status(400).json({ error: 'Missing code' });
+    }
+
+    // Check that environment variables exist
+    if (!CLIENT_ID || !CLIENT_SECRET) {
+        console.error('CLIENT_ID or CLIENT_SECRET is missing!');
+        console.log('CLIENT_ID:', CLIENT_ID ? 'set' : 'missing');
+        console.log('CLIENT_SECRET:', CLIENT_SECRET ? 'set' : 'missing');
+        return res.status(500).json({ error: 'Server misconfiguration: CLIENT_ID or CLIENT_SECRET missing' });
+    }
 
     try {
+        // Build URL-encoded body
         const params = new URLSearchParams();
         params.append('code', code);
         params.append('client_secret', CLIENT_SECRET);
         params.append('client_id', CLIENT_ID);
-        params.append("redirect_uri", "https://star-check-in-oauth-redirect.onrender.com/eventbrite-callback.html");
+        params.append('redirect_uri', 'https://star-check-in-oauth-redirect.onrender.com/eventbrite-callback.html');
         params.append('grant_type', 'authorization_code');
+
+        console.log('Sending request to Eventbrite with params:', params.toString());
 
         const response = await axios.post(
             'https://www.eventbrite.com/oauth/token',
@@ -52,11 +70,14 @@ app.post('/exchange_token', async (req, res) => {
             { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
         );
 
+        // Log full response for debugging
+        console.log('Eventbrite response data:', response.data);
+
         accessToken = response.data.access_token;
         refreshToken = response.data.refresh_token;
 
-        console.log('Received access token:', accessToken);
-        console.log('Received refresh token:', refreshToken);
+        console.log('Saved access token:', accessToken);
+        console.log('Saved refresh token:', refreshToken);
 
         res.json({
             access_token: accessToken,
@@ -64,9 +85,13 @@ app.post('/exchange_token', async (req, res) => {
         });
     } catch (err) {
         console.error('Error exchanging code:', err.response?.data || err.message);
-        res.status(500).json({ error: 'Token exchange failed', details: err.response?.data || err.message });
+        res.status(500).json({ 
+            error: 'Token exchange failed', 
+            details: err.response?.data || err.message 
+        });
     }
 });
+
 
 
 // ----------------- Get list of events -----------------
