@@ -261,4 +261,3 @@ app.post('/webhook', async (req, res) => {
 // ----------------- Health check -----------------
 app.get('/', (req, res) => res.send('Star Check-In backend is running'));
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
