@@ -134,7 +134,9 @@ app.get('/events', async (req, res) => {
             }
         }
 
-        console.log('Fetched all events:', allEvents);
+        // After collecting allEvents
+        allEvents.reverse(); // now newest events are first
+        console.log('Fetched all events (reversed):', allEvents);
         res.json(allEvents);
 
     } catch (err) {
