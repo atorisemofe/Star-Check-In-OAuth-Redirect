@@ -146,70 +146,69 @@ app.get('/events', async (req, res) => {
 });
 
 
-// ----------------- Get attendees for an event -----------------
+// ----------------- Get attendees for an event (ALL pages) -----------------
 app.get('/attendees/:eventId', async (req, res) => {
-    const { eventId } = req.params;
-    if (!accessToken) return res.status(401).json({ error: 'No access token saved' });
+    const { eventId } = req.params
+    if (!accessToken) {
+        return res.status(401).json({ error: 'No access token saved' })
+    }
 
     try {
-        const response = await axios.get(`https://www.eventbriteapi.com/v3/events/${eventId}/attendees/`, {
-            headers: { Authorization: `Bearer ${accessToken}` }
-        });
+        let allAttendees = []
+        let continuation = null
+        let hasMore = true
 
-        const attendees = response.data.attendees.map(a => ({
-            id: a.id,
-            name: a.profile.name,
-            email: a.profile.email,
-            status: a.status,
-            checked_in: a.checked_in,
-            answers: a.answers?.reduce((acc, ans) => {
-                acc[ans.question] = ans.answer;
-                return acc;
-            }, {}) || {}
-        }));
+        while (hasMore) {
+            const url = continuation
+                ? `https://www.eventbriteapi.com/v3/events/${eventId}/attendees/?continuation=${continuation}`
+                : `https://www.eventbriteapi.com/v3/events/${eventId}/attendees/`
 
-        console.log(`Fetched attendees for event ${eventId}:`, attendees);
-        res.json(attendees);
+            const response = await axios.get(url, {
+                headers: { Authorization: `Bearer ${accessToken}` }
+            })
+
+            const { attendees, pagination } = response.data
+
+            // Normalize attendees (your existing mapping)
+            const mapped = attendees.map(a => ({
+                id: a.id,
+                name: a.profile?.name,
+                email: a.profile?.email,
+                status: a.status,
+                checked_in: a.checked_in,
+                answers: a.answers?.reduce((acc, ans) => {
+                    acc[ans.question] = ans.answer
+                    return acc
+                }, {}) || {}
+            }))
+
+            allAttendees.push(...mapped)
+
+            hasMore = pagination?.has_more_items === true
+            continuation = pagination?.continuation
+
+            console.log(
+                `Fetched ${mapped.length} attendees (total so far: ${allAttendees.length})`
+            )
+        }
+
+        console.log(
+            `Finished fetching attendees for event ${eventId}. Total: ${allAttendees.length}`
+        )
+
+        res.json(allAttendees)
+
     } catch (err) {
-        console.error('Error fetching attendees:', err.response?.data || err.message);
-        res.status(500).json({ error: 'Failed to fetch attendees', details: err.response?.data || err.message });
+        console.error(
+            'Error fetching attendees:',
+            err.response?.data || err.message
+        )
+        res.status(500).json({
+            error: 'Failed to fetch attendees',
+            details: err.response?.data || err.message
+        })
     }
-});
-
-// // ----------------- Webhook endpoint -----------------
-// app.post('/webhook', async (req, res) => {
-//     try {
-//         const eventType = req.headers['x-eventbrite-event'];
-//         const deliveryId = req.headers['x-eventbrite-delivery'];
-//         const payload = req.body;
-
-//         console.log(`Received Eventbrite webhook: ${eventType} (delivery ${deliveryId})`);
-//         console.log('Payload:', JSON.stringify(payload, null, 2));
-
-//         // For attendee.updated or attendee.created events, you may want to reload attendee data
-//         if (eventType?.startsWith('attendee.')) {
-//             const attendeeApiUrl = payload.api_url;
-//             console.log('Fetching updated attendee info from:', attendeeApiUrl);
-
-//             // Optional: Fetch the attendee data from Eventbrite immediately
-//             const response = await axios.get(attendeeApiUrl, {
-//                 headers: { Authorization: `Bearer ${accessToken}` }
-//             });
-
-//             const updatedAttendee = response.data;
-//             console.log('Updated attendee details:', updatedAttendee);
-
-//             // TODO: Broadcast to your Android app via a WebSocket, push notification, or refresh endpoint
-//             // Example: Notify connected clients to refetch attendees for the event
-//         }
-
-//         // Respond immediately to Eventbrite to acknowledge delivery
-//         res.json({ received: true });
-//     } catch (err) {
-//         console.error('Error handling webhook:', err.response?.data || err.message);
-//         res.status(500).json({ error: 'Failed to process webhook', details: err.response?.data || err.message });
-//     }
-// });
+})
 
 // ----------------- WebSocket server -----------------
 const wss = new WebSocket.Server({ noServer: true });
