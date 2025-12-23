@@ -240,16 +240,27 @@ app.post('/webhook', async (req, res) => {
         console.log(`Webhook: ${eventType} (delivery ${deliveryId})`);
         console.log('Payload:', JSON.stringify(payload, null, 2));
 
-        if (eventType?.startsWith('attendee.')) {
-            const attendeeApiUrl = payload.api_url;
-            const response = await axios.get(attendeeApiUrl, {
-                headers: { Authorization: `Bearer ${accessToken}` }
-            });
+        // if (eventType?.startsWith('attendee.')) {
+        //     const attendeeApiUrl = payload.api_url;
+        //     const response = await axios.get(attendeeApiUrl, {
+        //         headers: { Authorization: `Bearer ${accessToken}` }
+        //     });
 
-            const updatedAttendee = response.data;
-            const eventId = updatedAttendee.event_id || payload.config?.event_id;
-            if (eventId) broadcastEvent(eventId);
+        //     const updatedAttendee = response.data;
+        //     const eventId = updatedAttendee.event_id || payload.config?.event_id;
+        //     if (eventId) broadcastEvent(eventId);
+        // }
+        if (eventType?.startsWith('attendee.')) {
+            const eventId = extractEventIdFromApiUrl(payload.api_url);
+
+            if (!eventId) {
+                console.warn('Could not extract eventId from api_url');
+                return res.json({ received: true });
+            }
+
+            broadcastEvent(eventId);
         }
+
 
         res.json({ received: true });
     } catch (err) {
@@ -258,6 +269,12 @@ app.post('/webhook', async (req, res) => {
     }
 });
 
+
+// ----------------- Extract EventID -----------------
+function extractEventIdFromApiUrl(apiUrl) {
+    const match = apiUrl.match(/\/events\/(\d+)\//);
+    return match ? match[1] : null;
+}
 
 // ----------------- Health check -----------------
 app.get('/', (req, res) => res.send('Star Check-In backend is running'));
